@@ -19,6 +19,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /project
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /install /usr/local
 
 COPY app/ app/
@@ -30,4 +34,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
