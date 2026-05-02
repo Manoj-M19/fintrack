@@ -1,0 +1,99 @@
+version: "3.11"
+
+services:
+
+  # ── FastAPI application ───────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      target: runtime
+    container_name: fintrack_api
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fintrack:secret@postgres:5432/fintrack_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Mount source for hot-reload in development
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  # ── Celery worker ─────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      target: runtime
+    container_name: fintrack_worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fintrack:secret@postgres:5432/fintrack_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      - redis
+      - postgres
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    restart: unless-stopped
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: fintrack_postgres
+    environment:
+      POSTGRES_USER: fintrack
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: fintrack_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fintrack -d fintrack_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fintrack_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Migrations (runs once then exits) ─────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      target: runtime
+    container_name: fintrack_migrate
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fintrack:secret@postgres:5432/fintrack_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: alembic upgrade head
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
